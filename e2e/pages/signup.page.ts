@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 /** Visible milestones in Sony's signup journey. No credentials are captured. */
 export class SignupPage {
   readonly verificationMessage: Locator;
+  readonly sonyError: Locator;
   readonly doThisLater: Locator;
   readonly email: Locator;
   readonly onlineId: Locator;
@@ -36,16 +37,36 @@ export class SignupPage {
     this.verificationMessage = page.getByText(
       /verify (your )?email|verification email|email (has been )?sent|check your email/i,
     ).first();
+    this.sonyError = page.getByText(/^(something went wrong|an error has occurred|an error occurred|a connection to the server could not be established)\.?$/i).first();
     this.doThisLater = page.getByRole('link', { name: 'Do This Later', exact: true });
   }
 
+  async clearCacheAndHardReload(): Promise<void> {
+    const session = await this.page.context().newCDPSession(this.page);
+    try {
+      await session.send('Network.clearBrowserCache');
+      await Promise.all([
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        session.send('Page.reload', { ignoreCache: true }),
+      ]);
+    } finally {
+      await session.detach();
+    }
+  }
+
   async open(url: string): Promise<void> {
-    await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+    const session = await this.page.context().newCDPSession(this.page);
+    try {
+      await session.send('Network.clearBrowserCache');
+      await this.page.goto(url, { waitUntil: 'domcontentloaded' });
+    } finally {
+      await session.detach();
+    }
   }
 
   async startSignup(): Promise<void> {
-    await this.page.getByRole('button', { name: 'Create an Account' }).click();
-    await this.page.getByRole('combobox', { name: 'United Kingdom' }).selectOption({ label: 'Indonesia' });
+    await this.page.getByRole('button', { name: 'Create an Account' }).click({ timeout: 30_000 });
+    await this.page.getByRole('combobox', { name: 'United Kingdom' }).selectOption({ label: 'Indonesia' }, { timeout: 30_000 });
     await this.page.getByRole('combobox', { name: 'Country or region' }).selectOption({ label: 'Indonesia' });
   }
 
