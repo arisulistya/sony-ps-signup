@@ -1,0 +1,8 @@
+node_modules/
+playwright-report/
+test-results/
+.env
+.auth/
+.playwright-cli/
+e2e/test-data/
+e2e/output-data/

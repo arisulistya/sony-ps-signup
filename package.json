@@ -1,0 +1,22 @@
+{
+  "name": "sony-ps-signup-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test --grep-invert @live",
+    "test:live": "playwright test --grep @live --headed --workers=1",
+    "test:batch": "node scripts/run-signup-batch.mjs",
+    "test:batch-data": "node --test scripts/batch-data.test.mjs",
+    "test:list": "playwright test --list",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-playwright": "^2.0.0",
+    "typescript": "^5.0.0"
+  }
+}
