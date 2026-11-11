@@ -75,11 +75,21 @@ the highest number in existing local batches, or start at 1 if there are none:
 npm run test:batch -- --count 10
 ```
 
-Playwright runs one headed test per account, sequentially, with no retries. The
+Playwright runs one headed test per account, sequentially. The
+test clears Chrome's shared browser cache before opening the signup page for each
+account. This also clears cached resources for other sites in the
+same Chrome profile; it does not clear cookies or sign you out.
+
+The
 signup flow selects the requested communication preference, submits the agreement
 and account-creation forms, and selects a suggested online ID when `onlineId` is
 unavailable. Review the Sony terms and the test behavior before running it. The
 test waits five seconds before the final account-creation click.
+If Sony shows a recognized error after submission, the test clears the cache,
+hard-reloads the error page, and restarts the same account, for up to three total
+attempts. Other failures
+and unrecognized error messages stop the batch. An error after submission does
+not prove whether Sony created the account; check account status if a retry fails.
 
 ## 6. Review batch files and results
 

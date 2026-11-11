@@ -1,9 +1,61 @@
 import { test, liveTest, expect } from '../fixtures/signup.fixture';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { markVerificationScreenSeen, nextAccount, saveSelectedOnlineId, type Account } from '../helpers/account-data';
 import { saveBatchSuccess } from '../helpers/output-data';
 import type { SignupPage } from '../pages/signup.page';
+import { runWithSonyErrorRetry } from '../helpers/signup-retry';
+
+test('clears cache before opening signup', async ({ page, signup }) => {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    if (request.url === '/') requests += 1;
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'public, max-age=3600' });
+    response.end('<h1>Signup</h1>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No local server address');
+    const url = `http://127.0.0.1:${address.port}/`;
+    await page.goto(url);
+    await page.goto(url);
+    expect(requests).toBe(1);
+    await signup.open(url);
+    await expect(page.getByRole('heading', { name: 'Signup' })).toBeVisible();
+    expect(requests).toBe(2);
+    await signup.clearCacheAndHardReload();
+    await expect(page.getByRole('heading', { name: 'Signup' })).toBeVisible();
+    expect(requests).toBe(3);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('recognizes a Sony error without confusing verification', async ({ page, signup }) => {
+  await page.setContent('<h1>Something went wrong</h1>');
+  await expect(signup.sonyError).toBeVisible();
+  await expect(signup.verificationMessage).toBeHidden();
+  await page.setContent('<h1>Check your email</h1>');
+  await expect(signup.verificationMessage).toBeVisible();
+  await expect(signup.sonyError).toBeHidden();
+});
+
+test('retries Sony errors and stops after three attempts', async () => {
+  const events: string[] = [];
+  await runWithSonyErrorRetry(async (number) => {
+    events.push(`attempt ${number}`);
+    return number < 3 ? 'sony-error' : 'verification';
+  }, async () => { events.push('recover'); });
+  expect(events).toEqual(['attempt 1', 'recover', 'attempt 2', 'recover', 'attempt 3']);
+  events.length = 0;
+  await expect(runWithSonyErrorRetry(async (number) => {
+    events.push(`attempt ${number}`);
+    return 'sony-error';
+  }, async () => { events.push('recover'); })).rejects.toThrow('after all three signup attempts');
+  expect(events).toEqual(['attempt 1', 'recover', 'attempt 2', 'recover', 'attempt 3']);
+});
 
 test('selects email preference and recognizes verification', async ({ page, signup }) => {
   await page.setContent('<main><section><label>Email address <input></label><label>Online ID <input></label><input placeholder="First name"><input placeholder="Last name"></section><section id="main-layer"><label>Email address <input></label><label>Online ID <input></label><input placeholder="First name"><input placeholder="Last name"><input type="checkbox" id="sonyCommunications" style="position:absolute;opacity:0"><label for="sonyCommunications">Receive via Email</label></section><h1>Check your email</h1></main>');
@@ -68,14 +120,26 @@ test('continues from a selected ID to password setup', async ({ page, signup }) 
 });
 
 async function runSignup(signup: SignupPage, account: Account, batchOutput?: string): Promise<void> {
+  test.setTimeout(45 * 60_000);
+  await runWithSonyErrorRetry(async (number) => {
+    console.log(`Signup attempt ${number} of 3 for ${account.email}.`);
+    return runSignupAttempt(signup, account, number, batchOutput);
+  }, async () => {
+    console.log('Sony showed an error; clearing cache and hard-reloading before retrying.');
+    await signup.clearCacheAndHardReload();
+  });
+}
+
+async function runSignupAttempt(signup: SignupPage, account: Account, attempt: number, batchOutput?: string): Promise<'verification' | 'sony-error'> {
   const url = process.env.SONY_SIGNUP_URL ?? 'https://www.playstation.com/acct/create-account';
   console.log(`Starting signup for ${account.email}`);
-  test.setTimeout(15 * 60_000);
   let selectedId = '';
 
   await test.step('Open signup and fill location and birth date', async () => {
-    if (process.env.RESUME_SIGNUP !== '1') {
+    if (process.env.RESUME_SIGNUP !== '1' || attempt > 1) {
+      console.log(`Clearing Chrome cache before opening signup for ${account.email}.`);
       await signup.open(url!);
+      console.log(`Cache cleared and signup page opened for ${account.email}.`);
       await signup.startSignup();
     }
     await signup.fillPersonalInfo(account);
@@ -128,13 +192,15 @@ async function runSignup(signup: SignupPage, account: Account, batchOutput?: str
     console.log('Enter and submit the password in Chrome to create the account.');
   });
 
-  await test.step('Observe the email verification screen', async () => {
-    await expect(signup.verificationMessage).toBeVisible({ timeout: 14 * 60_000 });
+  return test.step('Observe the email verification screen', async () => {
+    await expect(signup.verificationMessage.or(signup.sonyError).filter({ visible: true }).first()).toBeVisible({ timeout: 14 * 60_000 });
+    if (!(await signup.verificationMessage.isVisible())) return 'sony-error';
     // Record the observed account state before deferring, so a later navigation error does not lose it.
     if (batchOutput) await saveBatchSuccess(batchOutput, account, selectedId);
     else await markVerificationScreenSeen(account.email);
     await signup.doThisLater.click({ timeout: 30_000 });
     await expect(signup.doThisLater).toBeHidden({ timeout: 30_000 });
+    return 'verification';
   });
 }
 
